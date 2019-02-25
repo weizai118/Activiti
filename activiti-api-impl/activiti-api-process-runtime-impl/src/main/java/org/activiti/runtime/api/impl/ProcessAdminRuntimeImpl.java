@@ -1,4 +1,4 @@
-/*
+/* 
  * Copyright 2018 Alfresco, Inc. and/or its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,7 +30,9 @@ import org.activiti.api.process.model.payloads.SetProcessVariablesPayload;
 import org.activiti.api.process.model.payloads.SignalPayload;
 import org.activiti.api.process.model.payloads.StartProcessPayload;
 import org.activiti.api.process.model.payloads.SuspendProcessPayload;
+import org.activiti.api.process.model.payloads.UpdateProcessPayload;
 import org.activiti.api.process.runtime.ProcessAdminRuntime;
+import org.activiti.api.runtime.model.impl.ProcessInstanceImpl;
 import org.activiti.api.runtime.shared.NotFoundException;
 import org.activiti.api.runtime.shared.query.Page;
 import org.activiti.api.runtime.shared.query.Pageable;
@@ -39,9 +41,10 @@ import org.activiti.engine.RuntimeService;
 import org.activiti.engine.repository.ProcessDefinitionQuery;
 import org.activiti.runtime.api.model.impl.APIProcessDefinitionConverter;
 import org.activiti.runtime.api.model.impl.APIProcessInstanceConverter;
-import org.activiti.api.runtime.model.impl.ProcessInstanceImpl;
 import org.activiti.runtime.api.query.impl.PageImpl;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.transaction.annotation.Transactional;
 
 @PreAuthorize("hasRole('ACTIVITI_ADMIN')")
 public class ProcessAdminRuntimeImpl implements ProcessAdminRuntime {
@@ -54,14 +57,18 @@ public class ProcessAdminRuntimeImpl implements ProcessAdminRuntime {
 
     private final APIProcessInstanceConverter processInstanceConverter;
 
+    private final ApplicationEventPublisher eventPublisher;
+
     public ProcessAdminRuntimeImpl(RepositoryService repositoryService,
                                    APIProcessDefinitionConverter processDefinitionConverter,
                                    RuntimeService runtimeService,
-                                   APIProcessInstanceConverter processInstanceConverter) {
+                                   APIProcessInstanceConverter processInstanceConverter,
+                                   ApplicationEventPublisher eventPublisher) {
         this.repositoryService = repositoryService;
         this.processDefinitionConverter = processDefinitionConverter;
         this.runtimeService = runtimeService;
         this.processInstanceConverter = processInstanceConverter;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -121,7 +128,7 @@ public class ProcessAdminRuntimeImpl implements ProcessAdminRuntime {
                                                      .processDefinitionKey(startProcessPayload.getProcessDefinitionKey())
                                                      .businessKey(startProcessPayload.getBusinessKey())
                                                      .variables(startProcessPayload.getVariables())
-                                                     .name(startProcessPayload.getProcessInstanceName())
+                                                     .name(startProcessPayload.getName())
                                                      .start());
     }
 
@@ -167,6 +174,9 @@ public class ProcessAdminRuntimeImpl implements ProcessAdminRuntime {
             if (getProcessInstancesPayload.isActiveOnly()) {
                 internalQuery.active();
             }
+            if (getProcessInstancesPayload.getParentProcessInstanceId()!=null) {
+                internalQuery.superProcessInstanceId(getProcessInstancesPayload.getParentProcessInstanceId());
+            }
         }
         return new PageImpl<>(processInstanceConverter.from(internalQuery.listPage(pageable.getStartIndex(),
                                                                                    pageable.getMaxItems())),
@@ -186,10 +196,9 @@ public class ProcessAdminRuntimeImpl implements ProcessAdminRuntime {
     }
 
     @Override
+    @Transactional
     public void signal(SignalPayload signalPayload) {
-        //@TODO: define security policies for signalling
-        runtimeService.signalEventReceived(signalPayload.getName(),
-                                           signalPayload.getVariables());
+        eventPublisher.publishEvent(signalPayload);
     }
 
     @Override
@@ -206,24 +215,27 @@ public class ProcessAdminRuntimeImpl implements ProcessAdminRuntime {
     }
 
     @Override
+    public ProcessInstance update(UpdateProcessPayload updateProcessPayload) {
+        if (updateProcessPayload.getBusinessKey()!=null)
+            runtimeService.updateBusinessKey(updateProcessPayload.getProcessInstanceId(),updateProcessPayload.getBusinessKey());
+        if (updateProcessPayload.getName()!=null)
+            runtimeService.setProcessInstanceName(updateProcessPayload.getProcessInstanceId(),updateProcessPayload.getName());
+        
+        return processInstanceConverter.from(runtimeService.createProcessInstanceQuery()
+                                             .processInstanceId(updateProcessPayload.getProcessInstanceId()).singleResult());
+    }
+
+    @Override
     public void setVariables(SetProcessVariablesPayload setProcessVariablesPayload) {
-        if (setProcessVariablesPayload.isLocalOnly()) {
-            runtimeService.setVariablesLocal(setProcessVariablesPayload.getProcessInstanceId(),
-                                             setProcessVariablesPayload.getVariables());
-        } else {
-            runtimeService.setVariables(setProcessVariablesPayload.getProcessInstanceId(),
+        runtimeService.setVariables(setProcessVariablesPayload.getProcessInstanceId(),
                                         setProcessVariablesPayload.getVariables());
-        }
+
     }
 
     @Override
     public void removeVariables(RemoveProcessVariablesPayload removeProcessVariablesPayload) {
-        if (removeProcessVariablesPayload.isLocalOnly()) {
-            runtimeService.removeVariablesLocal(removeProcessVariablesPayload.getProcessInstanceId(),
-                                                removeProcessVariablesPayload.getVariableNames());
-        } else {
-            runtimeService.removeVariables(removeProcessVariablesPayload.getProcessInstanceId(),
+        runtimeService.removeVariables(removeProcessVariablesPayload.getProcessInstanceId(),
                                            removeProcessVariablesPayload.getVariableNames());
-        }
     }
+    
 }

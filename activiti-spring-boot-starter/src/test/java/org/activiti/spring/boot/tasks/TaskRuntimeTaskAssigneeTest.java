@@ -1,28 +1,24 @@
 package org.activiti.spring.boot.tasks;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import org.activiti.api.runtime.shared.query.Page;
 import org.activiti.api.runtime.shared.query.Pageable;
-import org.activiti.api.runtime.shared.security.SecurityManager;
 import org.activiti.api.task.model.Task;
 import org.activiti.api.task.model.builders.TaskPayloadBuilder;
 import org.activiti.api.task.runtime.TaskAdminRuntime;
 import org.activiti.api.task.runtime.TaskRuntime;
-import org.junit.FixMethodOrder;
+import org.activiti.spring.boot.security.util.SecurityUtil;
+import org.activiti.spring.boot.test.util.TaskCleanUpUtil;
+import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.junit.runners.MethodSorters;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.security.test.context.support.WithUserDetails;
-import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit4.SpringRunner;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 @RunWith(SpringRunner.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
-@ContextConfiguration
-@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class TaskRuntimeTaskAssigneeTest {
 
     @Autowired
@@ -32,44 +28,47 @@ public class TaskRuntimeTaskAssigneeTest {
     private TaskAdminRuntime taskAdminRuntime;
 
     @Autowired
-    private SecurityManager securityManager;
+    private SecurityUtil securityUtil;
 
+    @Autowired
+    private TaskCleanUpUtil taskCleanUpUtil;
 
-    @Test
-    @WithUserDetails(value = "garth", userDetailsServiceBeanName = "myUserDetailsService")
-    public void aCreateStandaloneTaskForAnotherAssignee() {
-
-        taskRuntime.create(TaskPayloadBuilder.create()
-                .withName("task for salaboy")
-                .withAssignee("salaboy")
-                .build());
-
-        // the owner should be able to see the created task
-        Page<Task> tasks = taskRuntime.tasks(Pageable.of(0,
-                                                         50));
-
-        assertThat(tasks.getContent()).hasSize(1);
-        Task task = tasks.getContent().get(0);
-
-        assertThat(task.getAssignee()).isEqualTo("salaboy");
-        assertThat(task.getStatus()).isEqualTo(Task.TaskStatus.ASSIGNED);
-
-
+    @After
+    public void taskCleanUp(){
+        taskCleanUpUtil.cleanUpWithAdmin();
     }
 
     @Test
-    @WithUserDetails(value = "salaboy", userDetailsServiceBeanName = "myUserDetailsService")
-    public void bCreateCheckTaskCreatedForSalaboyFromAnotherUser() {
+    public void aCreateStandaloneTaskForAnotherAssignee() {
+        securityUtil.logInAs("garth");
 
-        // the target user should be able to see the task as well
+        taskRuntime.create(TaskPayloadBuilder.create()
+                .withName("task for dean")
+                .withAssignee("dean") //but he should still be assigned the task
+                .build());
+
+        // the owner should be able to see the created task
         Page<Task> tasks = taskRuntime.tasks(Pageable.of(0,
                 50));
 
         assertThat(tasks.getContent()).hasSize(1);
         Task task = tasks.getContent().get(0);
 
-        String authenticatedUserId = securityManager.getAuthenticatedUserId();
-        assertThat(task.getAssignee()).isEqualTo(authenticatedUserId);
+        assertThat(task.getAssignee()).isEqualTo("dean");
+        assertThat(task.getStatus()).isEqualTo(Task.TaskStatus.ASSIGNED);
+
+
+        // Now the task should be visible for dean
+        securityUtil.logInAs("dean");
+
+        // the target user should be able to see the task as well
+        tasks = taskRuntime.tasks(Pageable.of(0,
+                50));
+
+        assertThat(tasks.getContent()).hasSize(1);
+        task = tasks.getContent().get(0);
+
+        assertThat(task.getAssignee()).isEqualTo("dean");
         assertThat(task.getStatus()).isEqualTo(Task.TaskStatus.ASSIGNED);
 
         Task deletedTask = taskRuntime.delete(TaskPayloadBuilder
@@ -85,24 +84,22 @@ public class TaskRuntimeTaskAssigneeTest {
                 50));
         assertThat(tasks.getContent()).hasSize(0);
 
-
     }
 
 
     @Test
-    @WithUserDetails(value = "garth", userDetailsServiceBeanName = "myUserDetailsService")
-    public void cCreateStandaloneTaskForGroupAndClaim() {
+    public void createStandaloneTaskForGroupAndClaim() {
 
+        securityUtil.logInAs("garth");
 
-        String authenticatedUserId = securityManager.getAuthenticatedUserId();
         Task standAloneTask = taskRuntime.create(TaskPayloadBuilder.create()
-                                                         .withName("group task")
-                                                         .withGroup("doctor")
-                                                         .build());
+                .withName("group task")
+                .withCandidateGroup("doctor")
+                .build());
 
         // the owner should be able to see the created task
         Page<Task> tasks = taskRuntime.tasks(Pageable.of(0,
-                                                         50));
+                50));
 
         assertThat(tasks.getContent()).hasSize(1);
         Task task = tasks.getContent().get(0);
@@ -111,23 +108,113 @@ public class TaskRuntimeTaskAssigneeTest {
         assertThat(task.getStatus()).isEqualTo(Task.TaskStatus.CREATED);
 
         Task claimedTask = taskRuntime.claim(TaskPayloadBuilder.claim().withTaskId(task.getId()).build());
-        assertThat(claimedTask.getAssignee()).isEqualTo(authenticatedUserId);
+        assertThat(claimedTask.getAssignee()).isEqualTo("garth");
         assertThat(claimedTask.getStatus()).isEqualTo(Task.TaskStatus.ASSIGNED);
     }
+    
+    @Test
+    public void createStandaloneTaskForGroupAndAdminAssignUser() {
 
+        securityUtil.logInAs("garth");
+
+        taskRuntime.create(TaskPayloadBuilder.create()
+                .withName("group task")
+                .withCandidateGroup("doctor")
+                .build());
+
+        // the owner should be able to see the created task
+        Page<Task> tasks = taskRuntime.tasks(Pageable.of(0,
+                50));
+
+        assertThat(tasks.getContent()).hasSize(1);
+        
+        Task task = tasks.getContent().get(0);
+        assertThat(task.getAssignee()).isNull();
+        assertThat(task.getStatus()).isEqualTo(Task.TaskStatus.CREATED);
+        
+        
+        securityUtil.logInAs("admin");
+        Task assignedTask = taskAdminRuntime.assign(TaskPayloadBuilder
+                                                  .assign()
+                                                  .withTaskId(task.getId())
+                                                  .withAssignee("garth")
+                                                  .build());
+        assertThat(assignedTask.getAssignee()).isEqualTo("garth");
+        assertThat(assignedTask.getStatus()).isEqualTo(Task.TaskStatus.ASSIGNED);
+        
+        securityUtil.logInAs("garth");
+        tasks = taskRuntime.tasks(Pageable.of(0,
+                                              50));
+
+        assertThat(tasks.getContent()).hasSize(1);
+        task = tasks.getContent().get(0);
+    
+        assertThat(task.getAssignee()).isEqualTo("garth");
+        
+        taskRuntime.delete(TaskPayloadBuilder
+                                              .delete()
+                                              .withTaskId(task.getId())
+                                              .withReason("test clean up")
+                                              .build());
+    }
 
     @Test
-    @WithUserDetails(value = "admin", userDetailsServiceBeanName = "myUserDetailsService")
-    public void dCleanUpWithAdmin() {
-        Page<Task> tasks = taskAdminRuntime.tasks(Pageable.of(0, 50));
-        for (Task t : tasks.getContent()) {
-            taskAdminRuntime.delete(TaskPayloadBuilder
-                    .delete()
-                    .withTaskId(t.getId())
-                    .withReason("test clean up")
-                    .build());
-        }
+    public void createStandaloneTaskForUsersAndAdminReassignUser() {
 
+        securityUtil.logInAs("garth");
+        
+        taskRuntime.create(TaskPayloadBuilder.create()
+                .withName("group task")
+                .withCandidateUsers("dean")
+                .withCandidateUsers("garth")
+                .build());
+
+        // the owner should be able to see the created task
+        Page<Task> tasks = taskRuntime.tasks(Pageable.of(0,
+                50));
+
+        assertThat(tasks.getContent()).hasSize(1);
+        
+        Task task = tasks.getContent().get(0);
+        assertThat(task.getAssignee()).isNull();
+        assertThat(task.getStatus()).isEqualTo(Task.TaskStatus.CREATED);
+        
+        
+        //Check that admin may assign a user to the task without assignee
+        securityUtil.logInAs("admin");
+        Task assignedTask = taskAdminRuntime.assign(TaskPayloadBuilder
+                                                  .assign()
+                                                  .withTaskId(task.getId())
+                                                  .withAssignee("garth")
+                                                  .build());
+        assertThat(assignedTask.getAssignee()).isEqualTo("garth");
+        assertThat(assignedTask.getStatus()).isEqualTo(Task.TaskStatus.ASSIGNED);
+        
+        //Check that admin may reassign a user to the task when assignee is present
+        assignedTask = taskAdminRuntime.assign(TaskPayloadBuilder
+                                               .assign()
+                                               .withTaskId(task.getId())
+                                               .withAssignee("dean")
+                                               .build());
+        assertThat(assignedTask.getAssignee()).isEqualTo("dean");
+        assertThat(assignedTask.getStatus()).isEqualTo(Task.TaskStatus.ASSIGNED);
+     
+        
+        securityUtil.logInAs("dean");
+        tasks = taskRuntime.tasks(Pageable.of(0,
+                                              50));
+
+        assertThat(tasks.getContent()).hasSize(1);
+        task = tasks.getContent().get(0);
+    
+        assertThat(task.getAssignee()).isEqualTo("dean");
+        
+        taskRuntime.delete(TaskPayloadBuilder
+                                              .delete()
+                                              .withTaskId(task.getId())
+                                              .withReason("test clean up")
+                                              .build());
     }
+
 
 }

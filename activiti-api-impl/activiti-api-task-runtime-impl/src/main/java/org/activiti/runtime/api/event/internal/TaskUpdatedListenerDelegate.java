@@ -31,10 +31,10 @@ public class TaskUpdatedListenerDelegate implements ActivitiEventListener {
 
     private ToAPITaskUpdatedEventConverter taskUpdatedEventConverter;
 
-    public TaskUpdatedListenerDelegate(List<TaskRuntimeEventListener<TaskUpdatedEvent>> taskUpdatedListeners,
-                                       ToAPITaskUpdatedEventConverter taskUpdatedEventConverter) {
-        this.taskUpdatedListeners = taskUpdatedListeners;
-        this.taskUpdatedEventConverter = taskUpdatedEventConverter;
+    public TaskUpdatedListenerDelegate(List<TaskRuntimeEventListener<TaskUpdatedEvent>> taskCreatedListeners,
+                                       ToAPITaskUpdatedEventConverter taskCreatedEventConverter) {
+        this.taskUpdatedListeners = taskCreatedListeners;
+        this.taskUpdatedEventConverter = taskCreatedEventConverter;
     }
 
     @Override

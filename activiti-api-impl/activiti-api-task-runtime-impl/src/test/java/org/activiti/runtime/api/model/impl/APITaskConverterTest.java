@@ -23,10 +23,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.mockito.InjectMocks;
 
-import static org.activiti.api.task.model.Task.TaskStatus.ASSIGNED;
-import static org.activiti.api.task.model.Task.TaskStatus.CANCELLED;
-import static org.activiti.api.task.model.Task.TaskStatus.CREATED;
-import static org.activiti.api.task.model.Task.TaskStatus.SUSPENDED;
+import static org.activiti.api.task.model.Task.TaskStatus.*;
 import static org.activiti.runtime.api.model.impl.MockTaskBuilder.taskBuilder;
 import static org.activiti.runtime.api.model.impl.MockTaskBuilder.taskEntityBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +56,7 @@ public class APITaskConverterTest {
                         .withProcessDefinitionId("testProcessDefinitionId")
                         .withProcessInstanceId("testProcessInstanceId")
                         .withParentTaskId("testParentTaskId")
+                        .withFormKey("testFormKey")
                         .build()
         );
 
@@ -76,6 +74,7 @@ public class APITaskConverterTest {
                             Task::getProcessDefinitionId,
                             Task::getProcessInstanceId,
                             Task::getParentTaskId,
+                            Task::getFormKey,
                             Task::getStatus)
                 .containsExactly("testTaskId",
                                  "testUser",
@@ -88,6 +87,7 @@ public class APITaskConverterTest {
                                  "testProcessDefinitionId",
                                  "testProcessInstanceId",
                                  "testParentTaskId",
+                                 "testFormKey",
                                  ASSIGNED);
     }
 
@@ -96,7 +96,7 @@ public class APITaskConverterTest {
         assertThat(taskConverter.from(taskEntityBuilder().withCancelled(true).build()))
                 .isNotNull()
                 .extracting(Task::getStatus)
-                .containsExactly(CANCELLED);
+                .isEqualTo(CANCELLED);
     }
 
     @Test
@@ -104,7 +104,7 @@ public class APITaskConverterTest {
         assertThat(taskConverter.from(taskEntityBuilder().withSuspended(true).build()))
                 .isNotNull()
                 .extracting(Task::getStatus)
-                .containsExactly(SUSPENDED);
+                .isEqualTo(SUSPENDED);
     }
 
     @Test
@@ -112,7 +112,7 @@ public class APITaskConverterTest {
         assertThat(taskConverter.from(taskBuilder().withAssignee("testUser").build()))
                 .isNotNull()
                 .extracting(Task::getStatus)
-                .containsExactly(ASSIGNED);
+                .isEqualTo(ASSIGNED);
     }
 
     @Test
@@ -120,6 +120,6 @@ public class APITaskConverterTest {
         assertThat(taskConverter.from(taskBuilder().build()))
                 .isNotNull()
                 .extracting(Task::getStatus)
-                .containsExactly(CREATED);
+                .isEqualTo(CREATED);
     }
 }

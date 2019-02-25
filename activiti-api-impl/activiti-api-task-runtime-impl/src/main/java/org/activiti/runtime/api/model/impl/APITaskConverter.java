@@ -24,9 +24,15 @@ public class APITaskConverter extends ListConverter<org.activiti.engine.task.Tas
 
     @Override
     public Task from(org.activiti.engine.task.Task internalTask) {
+        return from(internalTask,
+                    calculateStatus(internalTask));
+    }
+
+    public Task from(org.activiti.engine.task.Task internalTask,
+                             Task.TaskStatus status) {
         TaskImpl task = new TaskImpl(internalTask.getId(),
                                      internalTask.getName(),
-                                     calculateStatus(internalTask));
+                                     status);
         task.setProcessDefinitionId(internalTask.getProcessDefinitionId());
         task.setProcessInstanceId(internalTask.getProcessInstanceId());
         task.setAssignee(internalTask.getAssignee());
@@ -37,6 +43,7 @@ public class APITaskConverter extends ListConverter<org.activiti.engine.task.Tas
         task.setOwner(internalTask.getOwner());
         task.setParentTaskId(internalTask.getParentTaskId());
         task.setPriority(internalTask.getPriority());
+        task.setFormKey(internalTask.getFormKey());
         return task;
     }
 

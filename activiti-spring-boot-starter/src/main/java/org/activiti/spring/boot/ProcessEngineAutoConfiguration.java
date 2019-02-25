@@ -13,19 +13,31 @@
 package org.activiti.spring.boot;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import javax.sql.DataSource;
 
+import org.activiti.api.process.model.events.ProcessDeployedEvent;
+import org.activiti.api.process.runtime.events.listener.ProcessRuntimeEventListener;
+import org.activiti.engine.cfg.ProcessEngineConfigurator;
 import org.activiti.engine.impl.persistence.StrongUuidGenerator;
 import org.activiti.api.runtime.shared.identity.UserGroupManager;
+import org.activiti.engine.RepositoryService;
+import org.activiti.runtime.api.model.impl.APIProcessDefinitionConverter;
+import org.activiti.spring.ProcessDeployedEventProducer;
 import org.activiti.spring.SpringAsyncExecutor;
 import org.activiti.spring.SpringProcessEngineConfiguration;
+import org.activiti.spring.boot.process.validation.AsyncPropertyValidator;
 import org.activiti.spring.bpmn.parser.CloudActivityBehaviorFactory;
+import org.activiti.validation.ProcessValidatorImpl;
+import org.activiti.validation.validator.ValidatorSet;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import org.springframework.boot.autoconfigure.task.TaskExecutionAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -34,7 +46,7 @@ import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.transaction.PlatformTransactionManager;
 
 @Configuration
-@AutoConfigureAfter(DataSourceAutoConfiguration.class)
+@AutoConfigureAfter({DataSourceAutoConfiguration.class, TaskExecutionAutoConfiguration.class})
 @EnableConfigurationProperties(ActivitiProperties.class)
 public class ProcessEngineAutoConfiguration extends AbstractProcessEngineAutoConfiguration {
 
@@ -52,9 +64,11 @@ public class ProcessEngineAutoConfiguration extends AbstractProcessEngineAutoCon
             SpringAsyncExecutor springAsyncExecutor,
             ActivitiProperties activitiProperties,
             ProcessDefinitionResourceFinder processDefinitionResourceFinder,
-            @Autowired(required = false) ProcessEngineConfigurationConfigurer processEngineConfigurationConfigurer) throws IOException {
+            @Autowired(required = false) ProcessEngineConfigurationConfigurer processEngineConfigurationConfigurer,
+            @Autowired(required = false) List<ProcessEngineConfigurator> processEngineConfigurators) throws IOException {
 
         SpringProcessEngineConfiguration conf = new SpringProcessEngineConfiguration();
+        conf.setConfigurators(processEngineConfigurators);
         configureProcessDefinitionResources(processDefinitionResourceFinder,
                                             conf);
         conf.setDataSource(dataSource);
@@ -68,6 +82,17 @@ public class ProcessEngineAutoConfiguration extends AbstractProcessEngineAutoCon
         conf.setDatabaseSchemaUpdate(activitiProperties.getDatabaseSchemaUpdate());
         conf.setDbHistoryUsed(activitiProperties.isDbHistoryUsed());
         conf.setAsyncExecutorActivate(activitiProperties.isAsyncExecutorActivate());
+        if (!activitiProperties.isAsyncExecutorActivate()) {
+            ValidatorSet springBootStarterValidatorSet = new ValidatorSet("activiti-spring-boot-starter");
+            springBootStarterValidatorSet.addValidator(new AsyncPropertyValidator());
+            if (conf.getProcessValidator() == null) {
+                ProcessValidatorImpl processValidator = new ProcessValidatorImpl();
+                processValidator.addValidatorSet(springBootStarterValidatorSet);
+                conf.setProcessValidator(processValidator);
+            } else {
+                conf.getProcessValidator().getValidatorSets().add(springBootStarterValidatorSet);
+            }
+        }
         conf.setMailServerHost(activitiProperties.getMailServerHost());
         conf.setMailServerPort(activitiProperties.getMailServerPort());
         conf.setMailServerUsername(activitiProperties.getMailServerUserName());
@@ -81,6 +106,9 @@ public class ProcessEngineAutoConfiguration extends AbstractProcessEngineAutoCon
         }
 
         conf.setHistoryLevel(activitiProperties.getHistoryLevel());
+        conf.setCopyVariablesToLocalForTasks(activitiProperties.isCopyVariablesToLocalForTasks());
+        conf.setSerializePOJOsInVariablesToJson(activitiProperties.isSerializePOJOsInVariablesToJson());
+        conf.setJavaClassFieldForJackson(activitiProperties.getJavaClassFieldForJackson());
 
         if (activitiProperties.getCustomMybatisMappers() != null) {
             conf.setCustomMybatisMappers(getCustomMybatisMapperClasses(activitiProperties.getCustomMybatisMappers()));
@@ -96,6 +124,10 @@ public class ProcessEngineAutoConfiguration extends AbstractProcessEngineAutoCon
 
         if (activitiProperties.isUseStrongUuids()) {
             conf.setIdGenerator(new StrongUuidGenerator());
+        }
+
+        if (activitiProperties.getDeploymentMode() != null) {
+            conf.setDeploymentMode(activitiProperties.getDeploymentMode());
         }
 
         conf.setActivityBehaviorFactory(new CloudActivityBehaviorFactory());
@@ -123,5 +155,15 @@ public class ProcessEngineAutoConfiguration extends AbstractProcessEngineAutoCon
                                                    resourcePatternResolver);
     }
 
+    @Bean
+    @ConditionalOnMissingBean
+    public ProcessDeployedEventProducer processDeployedEventProducer(RepositoryService repositoryService,
+                                                                     APIProcessDefinitionConverter converter,
+                                                                     @Autowired(required = false) List<ProcessRuntimeEventListener<ProcessDeployedEvent>> listeners) {
+        return new ProcessDeployedEventProducer(repositoryService,
+                                                converter,
+                                                Optional.ofNullable(listeners)
+                                                        .orElse(Collections.emptyList()));
+    }
 }
 

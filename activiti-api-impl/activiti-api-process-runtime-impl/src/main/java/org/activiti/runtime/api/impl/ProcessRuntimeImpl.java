@@ -35,11 +35,18 @@ import org.activiti.api.process.model.payloads.SetProcessVariablesPayload;
 import org.activiti.api.process.model.payloads.SignalPayload;
 import org.activiti.api.process.model.payloads.StartProcessPayload;
 import org.activiti.api.process.model.payloads.SuspendProcessPayload;
+import org.activiti.api.process.model.payloads.UpdateProcessPayload;
 import org.activiti.api.process.runtime.ProcessRuntime;
 import org.activiti.api.process.runtime.conf.ProcessRuntimeConfiguration;
+import org.activiti.api.runtime.model.impl.ProcessDefinitionMetaImpl;
+import org.activiti.api.runtime.model.impl.ProcessInstanceImpl;
+import org.activiti.api.runtime.model.impl.ProcessInstanceMetaImpl;
 import org.activiti.api.runtime.shared.NotFoundException;
 import org.activiti.api.runtime.shared.query.Page;
 import org.activiti.api.runtime.shared.query.Pageable;
+import org.activiti.core.common.spring.security.policies.ActivitiForbiddenException;
+import org.activiti.core.common.spring.security.policies.ProcessSecurityPoliciesManager;
+import org.activiti.core.common.spring.security.policies.SecurityPolicyAccess;
 import org.activiti.engine.ActivitiObjectNotFoundException;
 import org.activiti.engine.RepositoryService;
 import org.activiti.engine.RuntimeService;
@@ -47,14 +54,10 @@ import org.activiti.engine.repository.ProcessDefinitionQuery;
 import org.activiti.runtime.api.model.impl.APIProcessDefinitionConverter;
 import org.activiti.runtime.api.model.impl.APIProcessInstanceConverter;
 import org.activiti.runtime.api.model.impl.APIVariableInstanceConverter;
-import org.activiti.api.runtime.model.impl.ProcessDefinitionMetaImpl;
-import org.activiti.api.runtime.model.impl.ProcessInstanceImpl;
-import org.activiti.api.runtime.model.impl.ProcessInstanceMetaImpl;
 import org.activiti.runtime.api.query.impl.PageImpl;
-import org.activiti.core.common.spring.security.policies.ActivitiForbiddenException;
-import org.activiti.core.common.spring.security.policies.ProcessSecurityPoliciesManager;
-import org.activiti.core.common.spring.security.policies.SecurityPolicyAccess;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.transaction.annotation.Transactional;
 
 @PreAuthorize("hasRole('ACTIVITI_USER')")
 public class ProcessRuntimeImpl implements ProcessRuntime {
@@ -73,13 +76,16 @@ public class ProcessRuntimeImpl implements ProcessRuntime {
 
     private final ProcessSecurityPoliciesManager securityPoliciesManager;
 
+    private final ApplicationEventPublisher eventPublisher;
+
     public ProcessRuntimeImpl(RepositoryService repositoryService,
                               APIProcessDefinitionConverter processDefinitionConverter,
                               RuntimeService runtimeService,
                               ProcessSecurityPoliciesManager securityPoliciesManager,
                               APIProcessInstanceConverter processInstanceConverter,
                               APIVariableInstanceConverter variableInstanceConverter,
-                              ProcessRuntimeConfiguration configuration) {
+                              ProcessRuntimeConfiguration configuration,
+                              ApplicationEventPublisher eventPublisher) {
         this.repositoryService = repositoryService;
         this.processDefinitionConverter = processDefinitionConverter;
         this.runtimeService = runtimeService;
@@ -87,6 +93,7 @@ public class ProcessRuntimeImpl implements ProcessRuntime {
         this.processInstanceConverter = processInstanceConverter;
         this.variableInstanceConverter = variableInstanceConverter;
         this.configuration = configuration;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -189,6 +196,10 @@ public class ProcessRuntimeImpl implements ProcessRuntime {
             internalQuery.active();
         }
 
+        if (getProcessInstancesPayload.getParentProcessInstanceId()!=null) {
+            internalQuery.superProcessInstanceId(getProcessInstancesPayload.getParentProcessInstanceId());
+        }
+        
         return new PageImpl<>(processInstanceConverter.from(internalQuery.listPage(pageable.getStartIndex(),
                                                                                    pageable.getMaxItems())),
                               Math.toIntExact(internalQuery.count()));
@@ -220,7 +231,7 @@ public class ProcessRuntimeImpl implements ProcessRuntime {
                                                      .processDefinitionKey(startProcessPayload.getProcessDefinitionKey())
                                                      .businessKey(startProcessPayload.getBusinessKey())
                                                      .variables(startProcessPayload.getVariables())
-                                                     .name(startProcessPayload.getProcessInstanceName())
+                                                     .name(startProcessPayload.getName())
                                                      .start());
     }
 
@@ -263,11 +274,8 @@ public class ProcessRuntimeImpl implements ProcessRuntime {
         processInstance(getVariablesPayload.getProcessInstanceId());
 
         Map<String, org.activiti.engine.impl.persistence.entity.VariableInstance> variables;
-        if (getVariablesPayload.isLocalOnly()) {
-            variables = runtimeService.getVariableInstancesLocal(getVariablesPayload.getProcessInstanceId());
-        } else {
-            variables = runtimeService.getVariableInstances(getVariablesPayload.getProcessInstanceId());
-        }
+        variables = runtimeService.getVariableInstances(getVariablesPayload.getProcessInstanceId());
+
         return variableInstanceConverter.from(variables.values());
     }
 
@@ -277,13 +285,9 @@ public class ProcessRuntimeImpl implements ProcessRuntime {
         if (!securityPoliciesManager.canWrite(processInstance.getProcessDefinitionKey())) {
             throw new ActivitiForbiddenException("Operation not permitted for " + processInstance.getProcessDefinitionKey() + " due security policy violation");
         }
-        if (removeProcessVariablesPayload.isLocalOnly()) {
-            runtimeService.removeVariablesLocal(removeProcessVariablesPayload.getProcessInstanceId(),
-                                                removeProcessVariablesPayload.getVariableNames());
-        } else {
-            runtimeService.removeVariables(removeProcessVariablesPayload.getProcessInstanceId(),
+        runtimeService.removeVariables(removeProcessVariablesPayload.getProcessInstanceId(),
                                            removeProcessVariablesPayload.getVariableNames());
-        }
+
     }
 
     @Override
@@ -292,20 +296,16 @@ public class ProcessRuntimeImpl implements ProcessRuntime {
         if (!securityPoliciesManager.canWrite(processInstance.getProcessDefinitionKey())) {
             throw new ActivitiForbiddenException("Operation not permitted for " + processInstance.getProcessDefinitionKey() + " due security policy violation");
         }
-        if (setProcessVariablesPayload.isLocalOnly()) {
-            runtimeService.setVariablesLocal(setProcessVariablesPayload.getProcessInstanceId(),
-                                             setProcessVariablesPayload.getVariables());
-        } else {
-            runtimeService.setVariables(setProcessVariablesPayload.getProcessInstanceId(),
+        runtimeService.setVariables(setProcessVariablesPayload.getProcessInstanceId(),
                                         setProcessVariablesPayload.getVariables());
-        }
+        
     }
 
     @Override
+    @Transactional
     public void signal(SignalPayload signalPayload) {
         //@TODO: define security policies for signalling
-        runtimeService.signalEventReceived(signalPayload.getName(),
-                                           signalPayload.getVariables());
+        eventPublisher.publishEvent(signalPayload);
     }
 
     @Override
@@ -323,4 +323,25 @@ public class ProcessRuntimeImpl implements ProcessRuntime {
         processInstanceMeta.setActiveActivitiesIds(runtimeService.getActiveActivityIds(processInstanceId));
         return processInstanceMeta;
     }
+
+    @Override
+    public ProcessInstance update(UpdateProcessPayload updateProcessPayload) {
+        ProcessInstance processInstance = processInstance(updateProcessPayload.getProcessInstanceId());
+        if (!securityPoliciesManager.canWrite(processInstance.getProcessDefinitionKey())) {
+            throw new ActivitiForbiddenException("Operation not permitted for " + processInstance.getProcessDefinitionKey() + " due security policy violation");
+        }
+        
+        if (updateProcessPayload.getBusinessKey()!=null)
+            runtimeService.updateBusinessKey(updateProcessPayload.getProcessInstanceId(),updateProcessPayload.getBusinessKey());
+        if (updateProcessPayload.getName()!=null)
+            runtimeService.setProcessInstanceName(updateProcessPayload.getProcessInstanceId(),updateProcessPayload.getName());
+        
+        ProcessInstance updatedProcessInstance=processInstanceConverter.from(runtimeService.createProcessInstanceQuery()
+                                                                             .processInstanceId(updateProcessPayload.getProcessInstanceId())
+                                                                             .singleResult());
+        
+        return updatedProcessInstance;
+ 
+    }
+    
 }
